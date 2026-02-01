@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Map;
 
 import org.slf4j.Logger;
+import org.spongepowered.configurate.BasicConfigurationNode;
 import org.spongepowered.configurate.ConfigurationNode;
 import org.spongepowered.configurate.loader.ConfigurationLoader;
 import org.spongepowered.configurate.yaml.YamlConfigurationLoader;
@@ -35,7 +36,7 @@ public class ConfigLoader {
       writeDefaultConfig(configPath);
     }
 
-    ConfigurationLoader<ConfigurationNode> loader = YamlConfigurationLoader.builder()
+    ConfigurationLoader<BasicConfigurationNode> loader = YamlConfigurationLoader.builder()
         .path(configPath)
         .defaultOptions(options -> options.serializers(TypeSerializerCollection.defaults()))
         .build();
