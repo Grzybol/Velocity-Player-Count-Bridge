@@ -12,7 +12,6 @@ import java.util.Map;
 import org.slf4j.Logger;
 import org.spongepowered.configurate.BasicConfigurationNode;
 import org.spongepowered.configurate.ConfigurationNode;
-import org.spongepowered.configurate.loader.ConfigurationLoader;
 import org.spongepowered.configurate.yaml.YamlConfigurationLoader;
 import org.spongepowered.configurate.serialize.TypeSerializerCollection;
 
@@ -36,7 +35,7 @@ public class ConfigLoader {
       writeDefaultConfig(configPath);
     }
 
-    ConfigurationLoader<BasicConfigurationNode> loader = YamlConfigurationLoader.builder()
+    YamlConfigurationLoader loader = YamlConfigurationLoader.builder()
         .path(configPath)
         .defaultOptions(options -> options.serializers(TypeSerializerCollection.defaults()))
         .build();
