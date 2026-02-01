@@ -12,13 +12,13 @@ import java.util.Map;
 import org.slf4j.Logger;
 import org.spongepowered.configurate.ConfigurationNode;
 import org.spongepowered.configurate.loader.ConfigurationLoader;
-import org.spongepowered.configurate.toml.TomlConfigurationLoader;
+import org.spongepowered.configurate.yaml.YamlConfigurationLoader;
 import org.spongepowered.configurate.serialize.TypeSerializerCollection;
 
 import io.leangen.geantyref.TypeToken;
 
 public class ConfigLoader {
-  private static final String DEFAULT_RESOURCE = "/config.toml";
+  private static final String DEFAULT_RESOURCE = "/config.yml";
 
   private final Path dataDirectory;
   private final Logger logger;
@@ -30,12 +30,12 @@ public class ConfigLoader {
 
   public BridgeConfig load() throws IOException {
     Files.createDirectories(dataDirectory);
-    Path configPath = dataDirectory.resolve("config.toml");
+    Path configPath = dataDirectory.resolve("config.yml");
     if (Files.notExists(configPath)) {
       writeDefaultConfig(configPath);
     }
 
-    ConfigurationLoader<ConfigurationNode> loader = TomlConfigurationLoader.builder()
+    ConfigurationLoader<ConfigurationNode> loader = YamlConfigurationLoader.builder()
         .path(configPath)
         .defaultOptions(options -> options.serializers(TypeSerializerCollection.defaults()))
         .build();
@@ -74,7 +74,7 @@ public class ConfigLoader {
     try (InputStream inputStream = getClass().getResourceAsStream(DEFAULT_RESOURCE)) {
       if (inputStream == null) {
         logger.warn("Default config resource {} not found; creating minimal config.", DEFAULT_RESOURCE);
-        Files.writeString(configPath, "channel=\"aiplayers:count\"\n", StandardCharsets.UTF_8);
+        Files.writeString(configPath, "channel: \"aiplayers:count\"\n", StandardCharsets.UTF_8);
         return;
       }
       Files.copy(inputStream, configPath);
