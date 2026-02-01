@@ -62,7 +62,7 @@ public class VelocityPlayerCountBridge {
       config = loader.load();
     } catch (IOException exception) {
       bridgeEnabled = false;
-      logger.error("Failed to load config.toml; bridge disabled.", exception);
+      logger.error("Failed to load config.yml; bridge disabled.", exception);
       return;
     }
 

@@ -18,24 +18,28 @@ plugin messaging channel.
    mvn package
    ```
 2. Drop the resulting JAR into your Velocity `plugins/` folder.
-3. Start Velocity once to generate `config.toml`, then edit it as needed.
+3. Start Velocity once to generate `config.yml`, then edit it as needed.
 
-## Configuration (`config.toml`)
+## Configuration (`config.yml`)
 
-```toml
-channel = "aiplayers:count"
-protocol = "aiplayers-count-v1"
-stale_after_ms = 30000
-debug = false
+```yaml
+channel: "aiplayers:count"
+protocol: "aiplayers-count-v1"
+stale_after_ms: 30000
+debug: false
 
-auth_mode = "per_server" # allowed: "global", "per_server"
-global_token = ""        # used if auth_mode=global
-server_tokens = { "lobby-1" = "token1", "survival-1" = "token2" }
+auth_mode: "per_server" # allowed: "global", "per_server"
+global_token: ""        # used if auth_mode=global
+server_tokens:
+  "lobby-1": "token1"
+  "survival-1": "token2"
 
-allowlist_enabled = true
-allowed_server_ids = ["lobby-1", "survival-1"]
+allowlist_enabled: true
+allowed_server_ids:
+  - "lobby-1"
+  - "survival-1"
 
-max_players_mode = "keep" # allowed: "keep", "use_max_override", "max_of_overrides"
+max_players_mode: "keep" # allowed: "keep", "use_max_override", "max_of_overrides"
 ```
 
 ### Auth notes
