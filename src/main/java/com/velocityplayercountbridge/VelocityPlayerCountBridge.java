@@ -4,6 +4,7 @@ import com.google.gson.Gson;
 import com.google.gson.JsonSyntaxException;
 import com.velocityplayercountbridge.config.BridgeConfig;
 import com.velocityplayercountbridge.config.ConfigLoader;
+import com.velocityplayercountbridge.logging.BridgeDebugLogger;
 import com.velocityplayercountbridge.model.CountPayload;
 import com.velocityplayercountbridge.model.ServerCountState;
 import com.velocitypowered.api.event.Subscribe;
@@ -20,6 +21,8 @@ import com.velocitypowered.api.proxy.messages.MinecraftChannelIdentifier;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.time.Instant;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
@@ -47,6 +50,7 @@ public class VelocityPlayerCountBridge {
   private BridgeConfig config;
   private ChannelIdentifier channelIdentifier;
   private volatile boolean bridgeEnabled = true;
+  private BridgeDebugLogger debugLogger;
 
   @Inject
   public VelocityPlayerCountBridge(ProxyServer proxy, Logger logger, @com.velocitypowered.api.plugin.annotation.DataDirectory Path dataDirectory) {
@@ -71,9 +75,24 @@ public class VelocityPlayerCountBridge {
       logger.error("auth_mode is set to global but global_token is empty. Bridge disabled until configured.");
     }
 
+    try {
+      debugLogger = new BridgeDebugLogger(logger, Paths.get("/logs"), Instant.now());
+      logger.info("Bridge debug logs will be written to {}.", debugLogger.logFile());
+    } catch (IOException exception) {
+      logger.warn("Failed to initialize bridge debug log file in /logs; continuing without file logging.", exception);
+    }
+
     channelIdentifier = MinecraftChannelIdentifier.from(config.channel());
     proxy.getChannelRegistrar().register(channelIdentifier);
     logger.info("Velocity Player Count Bridge initialized on channel {}.", config.channel());
+
+    logDebug("Proxy initialized. channel={} protocol={} auth_mode={} allowlist_enabled={} max_players_mode={} stale_after_ms={}",
+        config.channel(),
+        config.protocol(),
+        config.authMode(),
+        config.allowlistEnabled(),
+        config.maxPlayersMode(),
+        config.staleAfterMs());
   }
 
   @Subscribe
@@ -82,46 +101,65 @@ public class VelocityPlayerCountBridge {
       return;
     }
     if (!Objects.equals(event.getIdentifier(), channelIdentifier)) {
+      logDebug("PluginMessage ignored: channel mismatch. received_channel={} expected_channel={}",
+          event.getIdentifier().getId(), config.channel());
       return;
     }
     if (!(event.getSource() instanceof ServerConnection)) {
+      logDebug("PluginMessage ignored: source not ServerConnection. source_type={}",
+          event.getSource() == null ? "null" : event.getSource().getClass().getName());
       return;
     }
 
     String payloadText = new String(event.getData(), StandardCharsets.UTF_8);
+    logDebug("PluginMessage received. channel={} bytes={} payload={}", config.channel(), event.getData().length,
+        payloadText);
     CountPayload payload;
     try {
       payload = gson.fromJson(payloadText, CountPayload.class);
     } catch (JsonSyntaxException exception) {
       warnRateLimited("invalid-json", "Invalid JSON payload on channel {}", config.channel());
+      logDebug("PluginMessage rejected: invalid JSON. error={}", exception.getMessage());
       return;
     }
 
     if (payload == null) {
       warnRateLimited("null-payload", "Empty payload received on channel {}", config.channel());
+      logDebug("PluginMessage rejected: payload deserialized to null.");
       return;
     }
 
     String serverId = payload.server_id == null ? "" : payload.server_id.trim();
     if (serverId.isEmpty()) {
       warnRateLimited("missing-server-id", "Payload missing server_id; ignoring.");
+      logDebug("PluginMessage rejected: missing server_id. payload={}", payloadText);
       return;
     }
 
     if (!Objects.equals(config.protocol(), payload.protocol)) {
       warnRateLimited("protocol-" + serverId, "Protocol mismatch for server {}", serverId);
+      logDebug("PluginMessage rejected: protocol mismatch. server_id={} expected_protocol={} received_protocol={}",
+          serverId, config.protocol(), payload.protocol);
       return;
     }
 
     if (!isAuthorized(serverId, payload.auth)) {
       warnRateLimited("auth-" + serverId, "Rejected payload for server {} due to auth failure.", serverId);
+      logDebug("PluginMessage rejected: auth failure. server_id={} auth_mode={} auth_present={} auth_preview={}",
+          serverId, config.authMode(), payload.auth != null, maskAuth(payload.auth));
       return;
     }
 
     if (config.allowlistEnabled() && !config.allowedServerIds().contains(serverId)) {
       warnRateLimited("allowlist-" + serverId, "Server {} not in allowlist; ignoring payload.", serverId);
+      logDebug("PluginMessage rejected: server not in allowlist. server_id={}", serverId);
       return;
     }
+
+    logDebug(
+        "PluginMessage validated. server_id={} timestamp_ms={} online_humans={} online_ai={} online_total={} max_players_override={}",
+        serverId, payload.timestamp_ms, payload.online_humans, payload.online_ai, payload.online_total,
+        payload.max_players_override);
 
     int onlineHumans = Math.max(0, payload.online_humans);
     int onlineAi = Math.max(0, payload.online_ai);
@@ -140,6 +178,8 @@ public class VelocityPlayerCountBridge {
           logger.debug("Out-of-order payload for {} ignored ({} < {}).", serverId, payload.timestamp_ms,
               state.lastTimestampMs());
         }
+        logDebug("PluginMessage ignored: out-of-order timestamp. server_id={} incoming={} last={}", serverId,
+            payload.timestamp_ms, state.lastTimestampMs());
         return;
       }
       // Accept idempotent updates where timestamp_ms is equal to lastTimestampMs.
@@ -150,6 +190,8 @@ public class VelocityPlayerCountBridge {
       logger.debug("Accepted payload for {}: total={}, humans={}, ai={}, max_override={}", serverId, onlineTotal,
           onlineHumans, onlineAi, maxPlayersOverride);
     }
+    logDebug("PluginMessage accepted. server_id={} total={} humans={} ai={} max_override={}", serverId, onlineTotal,
+        onlineHumans, onlineAi, maxPlayersOverride);
   }
 
   @Subscribe
@@ -199,5 +241,22 @@ public class VelocityPlayerCountBridge {
     }
     warnTimestamps.put(key, now);
     logger.warn(message, args);
+  }
+
+  private void logDebug(String message, Object... args) {
+    if (debugLogger == null) {
+      return;
+    }
+    debugLogger.log(message, args);
+  }
+
+  private String maskAuth(String auth) {
+    if (auth == null || auth.isEmpty()) {
+      return "<empty>";
+    }
+    if (auth.length() <= 4) {
+      return "****";
+    }
+    return auth.substring(0, 2) + "..." + auth.substring(auth.length() - 2);
   }
 }
