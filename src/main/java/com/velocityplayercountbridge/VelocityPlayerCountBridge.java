@@ -75,11 +75,13 @@ public class VelocityPlayerCountBridge {
       logger.error("auth_mode is set to global but global_token is empty. Bridge disabled until configured.");
     }
 
+    Path logsDirectory = dataDirectory.resolve("logs");
     try {
-      debugLogger = new BridgeDebugLogger(logger, Paths.get("/logs"), Instant.now());
+      debugLogger = new BridgeDebugLogger(logger, logsDirectory, Instant.now());
       logger.info("Bridge debug logs will be written to {}.", debugLogger.logFile());
     } catch (IOException exception) {
-      logger.warn("Failed to initialize bridge debug log file in /logs; continuing without file logging.", exception);
+      logger.warn("Failed to initialize bridge debug log file in {}; continuing without file logging.",
+          logsDirectory, exception);
     }
 
     channelIdentifier = MinecraftChannelIdentifier.from(config.channel());
