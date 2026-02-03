@@ -56,6 +56,7 @@ public class ConfigLoader {
         .getList(String.class, Collections.emptyList());
 
     String maxPlayersModeRaw = root.node("max_players_mode").getString("keep");
+    int maxPlayersOverride = root.node("max_players_override").getInt(0);
 
     return new BridgeConfig(
         channel,
@@ -67,7 +68,8 @@ public class ConfigLoader {
         serverTokens,
         allowlistEnabled,
         allowedServerIds,
-        BridgeConfig.MaxPlayersMode.fromString(maxPlayersModeRaw));
+        BridgeConfig.MaxPlayersMode.fromString(maxPlayersModeRaw),
+        maxPlayersOverride);
   }
 
   private void writeDefaultConfig(Path configPath) throws IOException {
