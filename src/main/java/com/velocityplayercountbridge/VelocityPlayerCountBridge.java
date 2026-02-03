@@ -17,6 +17,9 @@ import com.velocitypowered.api.proxy.ServerConnection;
 import com.velocitypowered.api.proxy.server.ServerPing;
 import com.velocitypowered.api.proxy.messages.ChannelIdentifier;
 import com.velocitypowered.api.proxy.messages.MinecraftChannelIdentifier;
+import com.velocitypowered.api.proxy.services.RegisteredServiceProvider;
+
+import org.betterbox.elasticbuffer_velocity.logging.LogBuffer;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -51,6 +54,7 @@ public class VelocityPlayerCountBridge {
   private ChannelIdentifier channelIdentifier;
   private volatile boolean bridgeEnabled = true;
   private BridgeDebugLogger debugLogger;
+  private LogBuffer logBuffer;
 
   @Inject
   public VelocityPlayerCountBridge(ProxyServer proxy, Logger logger, @com.velocitypowered.api.plugin.annotation.DataDirectory Path dataDirectory) {
@@ -75,9 +79,19 @@ public class VelocityPlayerCountBridge {
       logger.error("auth_mode is set to global but global_token is empty. Bridge disabled until configured.");
     }
 
+    logBuffer = proxy.getServicesManager()
+        .getProvider(LogBuffer.class)
+        .map(RegisteredServiceProvider::getProvider)
+        .orElse(null);
+    if (logBuffer != null) {
+      logger.info("ElasticBuffer detected; bridge debug logs will be forwarded.");
+    } else {
+      logger.info("ElasticBuffer not detected; bridge debug logs will stay on disk.");
+    }
+
     Path logsDirectory = dataDirectory.resolve("logs");
     try {
-      debugLogger = new BridgeDebugLogger(logger, logsDirectory, Instant.now());
+      debugLogger = new BridgeDebugLogger(logger, logsDirectory, Instant.now(), logBuffer, "VelocityPlayerCountBridge");
       logger.info("Bridge debug logs will be written to {}.", debugLogger.logFile());
     } catch (IOException exception) {
       logger.warn("Failed to initialize bridge debug log file in {}; continuing without file logging.",

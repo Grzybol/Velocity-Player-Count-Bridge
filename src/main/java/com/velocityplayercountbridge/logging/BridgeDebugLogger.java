@@ -11,6 +11,8 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import org.betterbox.elasticbuffer_velocity.logging.LogBuffer;
+
 import org.slf4j.Logger;
 import org.slf4j.helpers.MessageFormatter;
 
@@ -21,9 +23,15 @@ public final class BridgeDebugLogger {
   private final Logger fallbackLogger;
   private final Path logFile;
   private final AtomicBoolean writeFailed = new AtomicBoolean(false);
+  private final AtomicBoolean bufferFailed = new AtomicBoolean(false);
+  private final LogBuffer logBuffer;
+  private final String pluginName;
 
-  public BridgeDebugLogger(Logger fallbackLogger, Path logsDirectory, Instant startInstant) throws IOException {
+  public BridgeDebugLogger(Logger fallbackLogger, Path logsDirectory, Instant startInstant, LogBuffer logBuffer,
+      String pluginName) throws IOException {
     this.fallbackLogger = fallbackLogger;
+    this.logBuffer = logBuffer;
+    this.pluginName = pluginName;
     Files.createDirectories(logsDirectory);
     String filename = "velocity-bridge-" + FILE_TIMESTAMP_FORMAT.format(LocalDateTime.ofInstant(startInstant, ZoneId.systemDefault())) + ".log";
     this.logFile = logsDirectory.resolve(filename);
@@ -36,6 +44,25 @@ public final class BridgeDebugLogger {
 
   public void log(String message, Object... args) {
     String formatted = MessageFormatter.arrayFormat(message, args).getMessage();
+    if (logBuffer != null && !bufferFailed.get()) {
+      try {
+        logBuffer.add(
+            formatted,
+            "DEBUG",
+            pluginName,
+            System.currentTimeMillis(),
+            "N/A",
+            "N/A",
+            "N/A",
+            0.0);
+        return;
+      } catch (Exception exception) {
+        if (bufferFailed.compareAndSet(false, true)) {
+          fallbackLogger.warn("Failed to send debug logs to ElasticBuffer; falling back to file logging.", exception);
+        }
+      }
+    }
+
     String line = LINE_TIMESTAMP_FORMAT.format(LocalDateTime.now()) + " " + formatted + System.lineSeparator();
     try {
       synchronized (this) {
