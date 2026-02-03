@@ -5,7 +5,7 @@
 
   <groupId>com.velocityplayercountbridge</groupId>
   <artifactId>velocity-player-count-bridge</artifactId>
-  <version>1.0.0</version>
+  <version>1.0.1</version>
   <name>Velocity Player Count Bridge</name>
   <description>Bridge AI player counts from backend servers to Velocity proxy ping.</description>
   <properties>
@@ -22,6 +22,10 @@
     <repository>
       <id>sponge</id>
       <url>https://repo.spongepowered.org/repository/maven-public/</url>
+    </repository>
+    <repository>
+      <id>jitpack.io</id>
+      <url>https://jitpack.io</url>
     </repository>
   </repositories>
 
@@ -41,6 +45,11 @@
       <groupId>org.spongepowered</groupId>
       <artifactId>configurate-yaml</artifactId>
       <version>4.2.0</version>
+    </dependency>
+    <dependency>
+      <groupId>com.github.Grzybol</groupId>
+      <artifactId>ElasticBufferVelocity</artifactId>
+      <version>v1.0</version>
     </dependency>
   </dependencies>
 
