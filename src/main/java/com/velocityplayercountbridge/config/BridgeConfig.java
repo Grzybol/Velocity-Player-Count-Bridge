@@ -18,6 +18,7 @@ public class BridgeConfig {
   private final boolean allowlistEnabled;
   private final Set<String> allowedServerIds;
   private final MaxPlayersMode maxPlayersMode;
+  private final int maxPlayersOverride;
 
   public BridgeConfig(
       String channel,
@@ -29,7 +30,8 @@ public class BridgeConfig {
       Map<String, String> serverTokens,
       boolean allowlistEnabled,
       List<String> allowedServerIds,
-      MaxPlayersMode maxPlayersMode) {
+      MaxPlayersMode maxPlayersMode,
+      int maxPlayersOverride) {
     this.channel = Objects.requireNonNull(channel, "channel");
     this.protocol = Objects.requireNonNull(protocol, "protocol");
     this.staleAfterMs = staleAfterMs;
@@ -46,6 +48,7 @@ public class BridgeConfig {
             .filter(value -> !value.isEmpty())
             .collect(Collectors.toUnmodifiableSet());
     this.maxPlayersMode = Objects.requireNonNull(maxPlayersMode, "maxPlayersMode");
+    this.maxPlayersOverride = Math.max(0, maxPlayersOverride);
   }
 
   public String channel() {
@@ -86,6 +89,10 @@ public class BridgeConfig {
 
   public MaxPlayersMode maxPlayersMode() {
     return maxPlayersMode;
+  }
+
+  public int maxPlayersOverride() {
+    return maxPlayersOverride;
   }
 
   public enum AuthMode {

@@ -88,12 +88,13 @@ public class VelocityPlayerCountBridge {
     proxy.getChannelRegistrar().register(channelIdentifier);
     logger.info("Velocity Player Count Bridge initialized on channel {}.", config.channel());
 
-    logDebug("Proxy initialized. channel={} protocol={} auth_mode={} allowlist_enabled={} max_players_mode={} stale_after_ms={}",
+    logDebug("Proxy initialized. channel={} protocol={} auth_mode={} allowlist_enabled={} max_players_mode={} max_players_override={} stale_after_ms={}",
         config.channel(),
         config.protocol(),
         config.authMode(),
         config.allowlistEnabled(),
         config.maxPlayersMode(),
+        config.maxPlayersOverride(),
         config.staleAfterMs());
   }
 
@@ -163,13 +164,29 @@ public class VelocityPlayerCountBridge {
         serverId, payload.timestamp_ms, payload.online_humans, payload.online_ai, payload.online_total,
         payload.max_players_override);
 
+    if (payload.online_humans < 0 || payload.online_ai < 0 || payload.online_total < 0
+        || payload.max_players_override < 0) {
+      warnRateLimited("negative-values-" + serverId,
+          "Negative player counts reported by {} (humans={}, ai={}, total={}, max_override={}).",
+          serverId, payload.online_humans, payload.online_ai, payload.online_total, payload.max_players_override);
+    }
+
     int onlineHumans = Math.max(0, payload.online_humans);
     int onlineAi = Math.max(0, payload.online_ai);
     int onlineTotal = Math.max(0, payload.online_total);
     int maxPlayersOverride = Math.max(0, payload.max_players_override);
     int minTotal = onlineHumans + onlineAi;
     if (onlineTotal < minTotal) {
+      warnRateLimited("total-underflow-" + serverId,
+          "Payload total lower than humans+ai for {} (total={}, humans={}, ai={}); correcting to {}.",
+          serverId, onlineTotal, onlineHumans, onlineAi, minTotal);
       onlineTotal = minTotal;
+    }
+
+    if (config.maxPlayersOverride() > 0 && onlineTotal > config.maxPlayersOverride()) {
+      warnRateLimited("total-over-max-" + serverId,
+          "Reported total for {} ({}) exceeds configured max_players_override ({}).",
+          serverId, onlineTotal, config.maxPlayersOverride());
     }
 
     long now = System.currentTimeMillis();
@@ -220,8 +237,14 @@ public class VelocityPlayerCountBridge {
     int onlineTotal = (int) Math.min(Integer.MAX_VALUE, onlineTotalSum);
     ServerPing.Builder builder = event.getPing().asBuilder().onlinePlayers(onlineTotal);
 
-    if (config.maxPlayersMode() == BridgeConfig.MaxPlayersMode.USE_MAX_OVERRIDE && maxOverride > 0) {
-      builder.maximumPlayers(maxOverride);
+    if (config.maxPlayersMode() == BridgeConfig.MaxPlayersMode.USE_MAX_OVERRIDE) {
+      int effectiveMaxOverride = maxOverride;
+      if (config.maxPlayersOverride() > 0) {
+        effectiveMaxOverride = config.maxPlayersOverride();
+      }
+      if (effectiveMaxOverride > 0) {
+        builder.maximumPlayers(effectiveMaxOverride);
+      }
     }
 
     event.setPing(builder.build());
