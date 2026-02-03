@@ -17,17 +17,16 @@ import com.velocitypowered.api.proxy.ServerConnection;
 import com.velocitypowered.api.proxy.server.ServerPing;
 import com.velocitypowered.api.proxy.messages.ChannelIdentifier;
 import com.velocitypowered.api.proxy.messages.MinecraftChannelIdentifier;
-import com.velocitypowered.api.proxy.services.RegisteredServiceProvider;
-
 import org.betterbox.elasticbuffer_velocity.logging.LogBuffer;
 
 import java.io.IOException;
+import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.time.Instant;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
 import javax.inject.Inject;
@@ -79,10 +78,7 @@ public class VelocityPlayerCountBridge {
       logger.error("auth_mode is set to global but global_token is empty. Bridge disabled until configured.");
     }
 
-    logBuffer = proxy.getServicesManager()
-        .getProvider(LogBuffer.class)
-        .map(RegisteredServiceProvider::getProvider)
-        .orElse(null);
+    logBuffer = resolveLogBuffer();
     if (logBuffer != null) {
       logger.info("ElasticBuffer detected; bridge debug logs will be forwarded.");
     } else {
@@ -287,6 +283,36 @@ public class VelocityPlayerCountBridge {
       return;
     }
     debugLogger.log(message, args);
+  }
+
+  private LogBuffer resolveLogBuffer() {
+    try {
+      Method getServicesManager = proxy.getClass().getMethod("getServicesManager");
+      Object servicesManager = getServicesManager.invoke(proxy);
+      if (servicesManager == null) {
+        return null;
+      }
+      Method getProvider = servicesManager.getClass().getMethod("getProvider", Class.class);
+      Object providerOptional = getProvider.invoke(servicesManager, LogBuffer.class);
+      if (!(providerOptional instanceof Optional<?> optional)) {
+        return null;
+      }
+      Object provider = optional.orElse(null);
+      if (provider == null) {
+        return null;
+      }
+      Method getProviderMethod = provider.getClass().getMethod("getProvider");
+      Object resolved = getProviderMethod.invoke(provider);
+      if (resolved instanceof LogBuffer buffer) {
+        return buffer;
+      }
+    } catch (NoSuchMethodException ignored) {
+      return null;
+    } catch (ReflectiveOperationException | RuntimeException exception) {
+      logger.warn("Failed to resolve ElasticBuffer service provider.", exception);
+      return null;
+    }
+    return null;
   }
 
   private String maskAuth(String auth) {
