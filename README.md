@@ -40,6 +40,7 @@ allowed_server_ids:
   - "survival-1"
 
 max_players_mode: "keep" # allowed: "keep", "use_max_override", "max_of_overrides"
+max_players_override: 0 # set > 0 to force a static max players value when max_players_mode=use_max_override
 ```
 
 ### Auth notes
@@ -63,6 +64,7 @@ Inactive servers are excluded from aggregation.
 - `keep`: leave Velocity's default max players untouched.
 - `use_max_override` / `max_of_overrides`: use the maximum `max_players_override` reported by any
   active server if it is greater than zero.
+- `max_players_override` is a top-level key in `config.yml` (do not indent it).
 
 ## Payload format
 
