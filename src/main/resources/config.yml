@@ -16,3 +16,15 @@ allowed_server_ids:
 
 max_players_mode: "keep" # allowed: "keep", "use_max_override", "max_of_overrides"
 max_players_override: 0 # set > 0 to cap reported AI players (and optionally force a static max when max_players_mode=use_max_override)
+
+polling:
+  enabled: false
+  interval_seconds: 10
+  request_timeout_ms: 2000
+  endpoints:
+    "lobby-1":
+      url: "http://127.0.0.1:8080/ai-players"
+      auth_header: "Bearer token1"
+    "survival-1":
+      url: "http://127.0.0.1:8080/ai-players"
+      auth_header: "Bearer token2"

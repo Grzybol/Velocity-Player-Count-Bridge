@@ -6,6 +6,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -58,6 +59,26 @@ public class ConfigLoader {
     String maxPlayersModeRaw = root.node("max_players_mode").getString("keep");
     int maxPlayersOverride = root.node("max_players_override").getInt(0);
 
+    ConfigurationNode pollingNode = root.node("polling");
+    boolean pollingEnabled = pollingNode.node("enabled").getBoolean(false);
+    long pollingIntervalSeconds = pollingNode.node("interval_seconds").getLong(10L);
+    long pollingRequestTimeoutMs = pollingNode.node("request_timeout_ms").getLong(2000L);
+    Map<String, PollingEndpoint> pollingEndpoints = new HashMap<>();
+    ConfigurationNode endpointsNode = pollingNode.node("endpoints");
+    for (Map.Entry<Object, ? extends ConfigurationNode> entry : endpointsNode.childrenMap().entrySet()) {
+      String serverId = entry.getKey() == null ? "" : entry.getKey().toString();
+      if (serverId.isBlank()) {
+        continue;
+      }
+      ConfigurationNode endpointNode = entry.getValue();
+      String url = endpointNode.node("url").getString("");
+      if (url.isBlank()) {
+        continue;
+      }
+      String authHeader = endpointNode.node("auth_header").getString("");
+      pollingEndpoints.put(serverId, new PollingEndpoint(url, authHeader));
+    }
+
     return new BridgeConfig(
         channel,
         protocol,
@@ -69,7 +90,11 @@ public class ConfigLoader {
         allowlistEnabled,
         allowedServerIds,
         BridgeConfig.MaxPlayersMode.fromString(maxPlayersModeRaw),
-        maxPlayersOverride);
+        maxPlayersOverride,
+        pollingEnabled,
+        pollingIntervalSeconds,
+        pollingRequestTimeoutMs,
+        pollingEndpoints);
   }
 
   private void writeDefaultConfig(Path configPath) throws IOException {
