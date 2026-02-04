@@ -4,6 +4,7 @@ import com.google.gson.Gson;
 import com.google.gson.JsonSyntaxException;
 import com.velocityplayercountbridge.config.BridgeConfig;
 import com.velocityplayercountbridge.config.ConfigLoader;
+import com.velocityplayercountbridge.config.PollingEndpoint;
 import com.velocityplayercountbridge.logging.BridgeDebugLogger;
 import com.velocityplayercountbridge.model.CountPayload;
 import com.velocityplayercountbridge.model.ServerCountState;
@@ -17,17 +18,24 @@ import com.velocitypowered.api.proxy.ServerConnection;
 import com.velocitypowered.api.proxy.server.ServerPing;
 import com.velocitypowered.api.proxy.messages.ChannelIdentifier;
 import com.velocitypowered.api.proxy.messages.MinecraftChannelIdentifier;
+import com.velocitypowered.api.scheduler.ScheduledTask;
 import org.betterbox.elasticbuffer_velocity.logging.LogBuffer;
 
 import java.io.IOException;
 import java.lang.reflect.Method;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 
 import javax.inject.Inject;
 
@@ -45,6 +53,7 @@ public class VelocityPlayerCountBridge {
   private final Logger logger;
   private final Path dataDirectory;
   private final Gson gson = new Gson();
+  private final HttpClient httpClient = HttpClient.newBuilder().build();
 
   private final Map<String, ServerCountState> serverStates = new ConcurrentHashMap<>();
   private final Map<String, Long> warnTimestamps = new ConcurrentHashMap<>();
@@ -54,6 +63,7 @@ public class VelocityPlayerCountBridge {
   private volatile boolean bridgeEnabled = true;
   private BridgeDebugLogger debugLogger;
   private LogBuffer logBuffer;
+  private ScheduledTask pollingTask;
 
   @Inject
   public VelocityPlayerCountBridge(ProxyServer proxy, Logger logger, @com.velocitypowered.api.plugin.annotation.DataDirectory Path dataDirectory) {
@@ -106,6 +116,8 @@ public class VelocityPlayerCountBridge {
         config.maxPlayersMode(),
         config.maxPlayersOverride(),
         config.staleAfterMs());
+
+    startPolling();
   }
 
   @Subscribe
@@ -142,91 +154,7 @@ public class VelocityPlayerCountBridge {
       return;
     }
 
-    String serverId = payload.server_id == null ? "" : payload.server_id.trim();
-    if (serverId.isEmpty()) {
-      warnRateLimited("missing-server-id", "Payload missing server_id; ignoring.");
-      logDebug("PluginMessage rejected: missing server_id. payload={}", payloadText);
-      return;
-    }
-
-    if (!Objects.equals(config.protocol(), payload.protocol)) {
-      warnRateLimited("protocol-" + serverId, "Protocol mismatch for server {}", serverId);
-      logDebug("PluginMessage rejected: protocol mismatch. server_id={} expected_protocol={} received_protocol={}",
-          serverId, config.protocol(), payload.protocol);
-      return;
-    }
-
-    if (!isAuthorized(serverId, payload.auth)) {
-      warnRateLimited("auth-" + serverId, "Rejected payload for server {} due to auth failure.", serverId);
-      logDebug("PluginMessage rejected: auth failure. server_id={} auth_mode={} auth_present={} auth_preview={}",
-          serverId, config.authMode(), payload.auth != null, maskAuth(payload.auth));
-      return;
-    }
-
-    if (config.allowlistEnabled() && !config.allowedServerIds().contains(serverId)) {
-      warnRateLimited("allowlist-" + serverId, "Server {} not in allowlist; ignoring payload.", serverId);
-      logDebug("PluginMessage rejected: server not in allowlist. server_id={}", serverId);
-      return;
-    }
-
-    logDebug(
-        "PluginMessage validated. server_id={} timestamp_ms={} online_humans={} online_ai={} online_total={} max_players_override={}",
-        serverId, payload.timestamp_ms, payload.online_humans, payload.online_ai, payload.online_total,
-        payload.max_players_override);
-
-    if (payload.online_humans < 0 || payload.online_ai < 0 || payload.online_total < 0
-        || payload.max_players_override < 0) {
-      warnRateLimited("negative-values-" + serverId,
-          "Negative player counts reported by {} (humans={}, ai={}, total={}, max_override={}).",
-          serverId, payload.online_humans, payload.online_ai, payload.online_total, payload.max_players_override);
-    }
-
-    int onlineHumans = Math.max(0, payload.online_humans);
-    int onlineAi = Math.max(0, payload.online_ai);
-    int onlineTotal = Math.max(0, payload.online_total);
-    int maxPlayersOverride = Math.max(0, payload.max_players_override);
-    int aiPlayersCap = config.maxPlayersOverride() > 0 ? config.maxPlayersOverride() : maxPlayersOverride;
-
-    if (aiPlayersCap > 0 && onlineAi > aiPlayersCap) {
-      warnRateLimited("ai-over-cap-" + serverId,
-          "Reported AI count for {} ({}) exceeds max_players_override ({}); capping.",
-          serverId, onlineAi, aiPlayersCap);
-      onlineAi = aiPlayersCap;
-    }
-
-    int minTotal = onlineHumans + onlineAi;
-    if (onlineTotal < minTotal) {
-      warnRateLimited("total-underflow-" + serverId,
-          "Payload total lower than humans+ai for {} (total={}, humans={}, ai={}); correcting to {}.",
-          serverId, onlineTotal, onlineHumans, onlineAi, minTotal);
-      onlineTotal = minTotal;
-    }
-    if (aiPlayersCap > 0 && onlineTotal > minTotal) {
-      onlineTotal = minTotal;
-    }
-
-    long now = System.currentTimeMillis();
-    ServerCountState state = serverStates.computeIfAbsent(serverId, ServerCountState::new);
-    synchronized (state) {
-      if (payload.timestamp_ms < state.lastTimestampMs()) {
-        if (config.debug()) {
-          logger.debug("Out-of-order payload for {} ignored ({} < {}).", serverId, payload.timestamp_ms,
-              state.lastTimestampMs());
-        }
-        logDebug("PluginMessage ignored: out-of-order timestamp. server_id={} incoming={} last={}", serverId,
-            payload.timestamp_ms, state.lastTimestampMs());
-        return;
-      }
-      // Accept idempotent updates where timestamp_ms is equal to lastTimestampMs.
-      state.update(now, payload.timestamp_ms, onlineHumans, onlineAi, onlineTotal, maxPlayersOverride);
-    }
-
-    if (config.debug()) {
-      logger.debug("Accepted payload for {}: total={}, humans={}, ai={}, max_override={}", serverId, onlineTotal,
-          onlineHumans, onlineAi, maxPlayersOverride);
-    }
-    logDebug("PluginMessage accepted. server_id={} total={} humans={} ai={} max_override={}", serverId, onlineTotal,
-        onlineHumans, onlineAi, maxPlayersOverride);
+    handlePayload(payload, payloadText, "plugin-message", null);
   }
 
   @Subscribe
@@ -329,5 +257,174 @@ public class VelocityPlayerCountBridge {
       return "****";
     }
     return auth.substring(0, 2) + "..." + auth.substring(auth.length() - 2);
+  }
+
+  private void startPolling() {
+    if (!bridgeEnabled || config == null) {
+      return;
+    }
+    if (!config.pollingEnabled()) {
+      return;
+    }
+    if (config.pollingEndpoints().isEmpty()) {
+      logger.warn("Polling enabled but no endpoints configured; skipping scheduler.");
+      return;
+    }
+    long intervalSeconds = config.pollingIntervalSeconds();
+    pollingTask = proxy.getScheduler().buildTask(this, this::pollEndpoints)
+        .repeat(intervalSeconds, TimeUnit.SECONDS)
+        .schedule();
+    logger.info("HTTP polling enabled: {} endpoints every {}s.", config.pollingEndpoints().size(), intervalSeconds);
+  }
+
+  private void pollEndpoints() {
+    if (!bridgeEnabled || config == null) {
+      return;
+    }
+    for (Map.Entry<String, PollingEndpoint> entry : config.pollingEndpoints().entrySet()) {
+      pollEndpoint(entry.getKey(), entry.getValue());
+    }
+  }
+
+  private void pollEndpoint(String endpointId, PollingEndpoint endpoint) {
+    URI uri;
+    try {
+      uri = URI.create(endpoint.url());
+    } catch (IllegalArgumentException exception) {
+      warnRateLimited("poll-url-" + endpointId, "Invalid polling URL for {}: {}", endpointId, endpoint.url());
+      logDebug("Polling rejected: invalid URL. endpoint_id={} url={} error={}", endpointId, endpoint.url(),
+          exception.getMessage());
+      return;
+    }
+
+    HttpRequest.Builder requestBuilder = HttpRequest.newBuilder(uri)
+        .timeout(Duration.ofMillis(config.pollingRequestTimeoutMs()))
+        .GET()
+        .header("Accept", "application/json");
+    if (!endpoint.authHeader().isEmpty()) {
+      requestBuilder.header("Authorization", endpoint.authHeader());
+    }
+
+    httpClient.sendAsync(requestBuilder.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8))
+        .whenComplete((response, error) -> {
+          if (error != null) {
+            warnRateLimited("poll-error-" + endpointId, "Polling failed for {}: {}", endpointId, error.getMessage());
+            logDebug("Polling error. endpoint_id={} error={}", endpointId, error.getMessage());
+            return;
+          }
+          int status = response.statusCode();
+          if (status < 200 || status >= 300) {
+            warnRateLimited("poll-status-" + endpointId, "Polling status {} for {}.", status, endpointId);
+            logDebug("Polling rejected: HTTP status. endpoint_id={} status={} body={}", endpointId, status,
+                response.body());
+            return;
+          }
+          String payloadText = response.body();
+          CountPayload payload;
+          try {
+            payload = gson.fromJson(payloadText, CountPayload.class);
+          } catch (JsonSyntaxException exception) {
+            warnRateLimited("poll-json-" + endpointId, "Invalid JSON payload from {}.", endpointId);
+            logDebug("Polling rejected: invalid JSON. endpoint_id={} error={}", endpointId, exception.getMessage());
+            return;
+          }
+          if (payload == null) {
+            warnRateLimited("poll-null-" + endpointId, "Empty payload received from {}.", endpointId);
+            logDebug("Polling rejected: payload deserialized to null. endpoint_id={}", endpointId);
+            return;
+          }
+          handlePayload(payload, payloadText, "http:" + endpointId, endpointId);
+        });
+  }
+
+  private void handlePayload(CountPayload payload, String payloadText, String source, String fallbackServerId) {
+    String serverId = payload.server_id == null ? "" : payload.server_id.trim();
+    if (serverId.isEmpty() && fallbackServerId != null && !fallbackServerId.isBlank()) {
+      serverId = fallbackServerId.trim();
+    }
+    if (serverId.isEmpty()) {
+      warnRateLimited("missing-server-id-" + source, "Payload missing server_id; ignoring.");
+      logDebug("Payload rejected: missing server_id. source={} payload={}", source, payloadText);
+      return;
+    }
+
+    if (!Objects.equals(config.protocol(), payload.protocol)) {
+      warnRateLimited("protocol-" + serverId, "Protocol mismatch for server {}", serverId);
+      logDebug("Payload rejected: protocol mismatch. source={} server_id={} expected_protocol={} received_protocol={}",
+          source, serverId, config.protocol(), payload.protocol);
+      return;
+    }
+
+    if (!isAuthorized(serverId, payload.auth)) {
+      warnRateLimited("auth-" + serverId, "Rejected payload for server {} due to auth failure.", serverId);
+      logDebug("Payload rejected: auth failure. source={} server_id={} auth_mode={} auth_present={} auth_preview={}",
+          source, serverId, config.authMode(), payload.auth != null, maskAuth(payload.auth));
+      return;
+    }
+
+    if (config.allowlistEnabled() && !config.allowedServerIds().contains(serverId)) {
+      warnRateLimited("allowlist-" + serverId, "Server {} not in allowlist; ignoring payload.", serverId);
+      logDebug("Payload rejected: server not in allowlist. source={} server_id={}", source, serverId);
+      return;
+    }
+
+    logDebug(
+        "Payload validated. source={} server_id={} timestamp_ms={} online_humans={} online_ai={} online_total={} max_players_override={}",
+        source, serverId, payload.timestamp_ms, payload.online_humans, payload.online_ai, payload.online_total,
+        payload.max_players_override);
+
+    if (payload.online_humans < 0 || payload.online_ai < 0 || payload.online_total < 0
+        || payload.max_players_override < 0) {
+      warnRateLimited("negative-values-" + serverId,
+          "Negative player counts reported by {} (humans={}, ai={}, total={}, max_override={}).",
+          serverId, payload.online_humans, payload.online_ai, payload.online_total, payload.max_players_override);
+    }
+
+    int onlineHumans = Math.max(0, payload.online_humans);
+    int onlineAi = Math.max(0, payload.online_ai);
+    int onlineTotal = Math.max(0, payload.online_total);
+    int maxPlayersOverride = Math.max(0, payload.max_players_override);
+    int aiPlayersCap = config.maxPlayersOverride() > 0 ? config.maxPlayersOverride() : maxPlayersOverride;
+
+    if (aiPlayersCap > 0 && onlineAi > aiPlayersCap) {
+      warnRateLimited("ai-over-cap-" + serverId,
+          "Reported AI count for {} ({}) exceeds max_players_override ({}); capping.",
+          serverId, onlineAi, aiPlayersCap);
+      onlineAi = aiPlayersCap;
+    }
+
+    int minTotal = onlineHumans + onlineAi;
+    if (onlineTotal < minTotal) {
+      warnRateLimited("total-underflow-" + serverId,
+          "Payload total lower than humans+ai for {} (total={}, humans={}, ai={}); correcting to {}.",
+          serverId, onlineTotal, onlineHumans, onlineAi, minTotal);
+      onlineTotal = minTotal;
+    }
+    if (aiPlayersCap > 0 && onlineTotal > minTotal) {
+      onlineTotal = minTotal;
+    }
+
+    long now = System.currentTimeMillis();
+    ServerCountState state = serverStates.computeIfAbsent(serverId, ServerCountState::new);
+    synchronized (state) {
+      if (payload.timestamp_ms < state.lastTimestampMs()) {
+        if (config.debug()) {
+          logger.debug("Out-of-order payload for {} ignored ({} < {}).", serverId, payload.timestamp_ms,
+              state.lastTimestampMs());
+        }
+        logDebug("Payload ignored: out-of-order timestamp. source={} server_id={} incoming={} last={}", source,
+            serverId, payload.timestamp_ms, state.lastTimestampMs());
+        return;
+      }
+      // Accept idempotent updates where timestamp_ms is equal to lastTimestampMs.
+      state.update(now, payload.timestamp_ms, onlineHumans, onlineAi, onlineTotal, maxPlayersOverride);
+    }
+
+    if (config.debug()) {
+      logger.debug("Accepted payload for {}: total={}, humans={}, ai={}, max_override={}", serverId, onlineTotal,
+          onlineHumans, onlineAi, maxPlayersOverride);
+    }
+    logDebug("Payload accepted. source={} server_id={} total={} humans={} ai={} max_override={}", source, serverId,
+        onlineTotal, onlineHumans, onlineAi, maxPlayersOverride);
   }
 }

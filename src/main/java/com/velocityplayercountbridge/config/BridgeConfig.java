@@ -19,6 +19,10 @@ public class BridgeConfig {
   private final Set<String> allowedServerIds;
   private final MaxPlayersMode maxPlayersMode;
   private final int maxPlayersOverride;
+  private final boolean pollingEnabled;
+  private final long pollingIntervalSeconds;
+  private final long pollingRequestTimeoutMs;
+  private final Map<String, PollingEndpoint> pollingEndpoints;
 
   public BridgeConfig(
       String channel,
@@ -31,7 +35,11 @@ public class BridgeConfig {
       boolean allowlistEnabled,
       List<String> allowedServerIds,
       MaxPlayersMode maxPlayersMode,
-      int maxPlayersOverride) {
+      int maxPlayersOverride,
+      boolean pollingEnabled,
+      long pollingIntervalSeconds,
+      long pollingRequestTimeoutMs,
+      Map<String, PollingEndpoint> pollingEndpoints) {
     this.channel = Objects.requireNonNull(channel, "channel");
     this.protocol = Objects.requireNonNull(protocol, "protocol");
     this.staleAfterMs = staleAfterMs;
@@ -49,6 +57,10 @@ public class BridgeConfig {
             .collect(Collectors.toUnmodifiableSet());
     this.maxPlayersMode = Objects.requireNonNull(maxPlayersMode, "maxPlayersMode");
     this.maxPlayersOverride = Math.max(0, maxPlayersOverride);
+    this.pollingEnabled = pollingEnabled;
+    this.pollingIntervalSeconds = Math.max(1L, pollingIntervalSeconds);
+    this.pollingRequestTimeoutMs = Math.max(250L, pollingRequestTimeoutMs);
+    this.pollingEndpoints = pollingEndpoints == null ? Collections.emptyMap() : Map.copyOf(pollingEndpoints);
   }
 
   public String channel() {
@@ -93,6 +105,22 @@ public class BridgeConfig {
 
   public int maxPlayersOverride() {
     return maxPlayersOverride;
+  }
+
+  public boolean pollingEnabled() {
+    return pollingEnabled;
+  }
+
+  public long pollingIntervalSeconds() {
+    return pollingIntervalSeconds;
+  }
+
+  public long pollingRequestTimeoutMs() {
+    return pollingRequestTimeoutMs;
+  }
+
+  public Map<String, PollingEndpoint> pollingEndpoints() {
+    return pollingEndpoints;
   }
 
   public enum AuthMode {
