@@ -4,19 +4,19 @@
 
 Velocity Player Count Bridge jest pluginem dla Velocity 3.4.0, którego zadaniem jest agregowanie liczby graczy z
 backendów (Paper/Spigot) i podstawianie wartości `onlinePlayers` w odpowiedzi na ping listy serwerów proxy.
-Komunikacja odbywa się przez kanał plugin messaging z użyciem JSON. Plugin weryfikuje protokół, autoryzację
-oraz allowlistę i odrzuca nieaktualne dane. 
+Komunikacja odbywa się przez Unix Domain Socket (UDS) z użyciem JSON (linie zakończone `\n`). Plugin weryfikuje
+protokół, autoryzację oraz allowlistę i odrzuca nieaktualne dane.
 
 ## Architektura i przepływ danych
 
 1. **Inicjalizacja proxy**
    - Ładowana jest konfiguracja z `config.yml` (tworzona na podstawie zasobu, jeśli jej brakuje).
-   - Rejestrowany jest kanał `aiplayers:count` (lub inny z konfiguracji).
+   - Uruchamiany jest serwer UDS na ścieżce `socket_path`.
    - Jeśli `auth_mode = global` i `global_token` jest puste, plugin dezaktywuje się.
 
 2. **Odbiór wiadomości z backendów**
-   - Plugin nasłuchuje `PluginMessageEvent` i akceptuje tylko wiadomości z serwerów backendowych.
-   - Treść wiadomości jest parsowana jako JSON do modelu `CountPayload`.
+   - Plugin akceptuje połączenia UDS i czyta payloady liniami.
+   - Treść linii jest parsowana jako JSON do modelu `CountPayload`.
    - Weryfikowane są:
      - `server_id` (niepuste),
      - zgodność pola `protocol`,
@@ -45,7 +45,7 @@ oraz allowlistę i odrzuca nieaktualne dane.
 
 Najważniejsze pola `config.yml`:
 
-- `channel`: kanał plugin messaging (domyślnie `aiplayers:count`).
+- `socket_path`: ścieżka do Unix Domain Socket (domyślnie `/tmp/velocity-player-count-bridge.sock`).
 - `protocol`: identyfikator protokołu payloadu (domyślnie `aiplayers-count-v1`).
 - `stale_after_ms`: czas po którym serwer uznawany jest za nieaktywny.
 - `auth_mode`: `global` lub `per_server`.
@@ -61,5 +61,4 @@ Najważniejsze pola `config.yml`:
 
 ## Ograniczenia
 
-- Plugin messaging wymaga aktywnego połączenia gracza między proxy a backendem, aby backend mógł wysłać wiadomość.
-
+- Komunikacja odbywa się lokalnie przez UDS i wymaga dostępu do pliku socketu na hoście proxy.

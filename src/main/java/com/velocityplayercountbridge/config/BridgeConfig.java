@@ -12,6 +12,7 @@ public class BridgeConfig {
   private final String protocol;
   private final long staleAfterMs;
   private final boolean debug;
+  private final String socketPath;
   private final AuthMode authMode;
   private final String globalToken;
   private final Map<String, String> serverTokens;
@@ -25,6 +26,7 @@ public class BridgeConfig {
       String protocol,
       long staleAfterMs,
       boolean debug,
+      String socketPath,
       AuthMode authMode,
       String globalToken,
       Map<String, String> serverTokens,
@@ -36,6 +38,9 @@ public class BridgeConfig {
     this.protocol = Objects.requireNonNull(protocol, "protocol");
     this.staleAfterMs = staleAfterMs;
     this.debug = debug;
+    this.socketPath = socketPath == null || socketPath.isBlank()
+        ? "/tmp/velocity-player-count-bridge.sock"
+        : socketPath.trim();
     this.authMode = Objects.requireNonNull(authMode, "authMode");
     this.globalToken = globalToken == null ? "" : globalToken;
     this.serverTokens = serverTokens == null ? Collections.emptyMap() : Map.copyOf(serverTokens);
@@ -65,6 +70,10 @@ public class BridgeConfig {
 
   public boolean debug() {
     return debug;
+  }
+
+  public String socketPath() {
+    return socketPath;
   }
 
   public AuthMode authMode() {
