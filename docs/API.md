@@ -1,11 +1,11 @@
 # API – Velocity Player Count Bridge
 
-## Kanał i protokół
+## Socket i protokół
 
-- **Kanał plugin messaging:** `aiplayers:count` (konfigurowalne w `config.yml`).
+- **Socket UDS:** ścieżka `socket_path` w `config.yml` (domyślnie `/tmp/velocity-player-count-bridge.sock`).
 - **Protokół payloadu:** `aiplayers-count-v1` (konfigurowalny w `config.yml`).
 
-Backend musi wysyłać komunikaty JSON (UTF‑8) na ten kanał z aktywnym połączeniem gracza do proxy.
+Backend wysyła linie JSON (UTF‑8) po Unix Domain Socket na hoście proxy. Każda linia to jeden payload.
 
 ## Format payloadu
 
@@ -86,12 +86,12 @@ W payloadzie `auth` musi odpowiadać tokenowi przypisanemu do `server_id`:
 }
 ```
 
-## Przykład użycia po stronie backendu (Paper/Spigot)
+## Przykład użycia po stronie backendu (UDS)
 
-Pseudokod wysyłający payload przez plugin messaging (wymaga aktywnego gracza na serwerze):
+Pseudokod wysyłający payload przez Unix Domain Socket:
 
 ```java
-String channel = "aiplayers:count";
+Path socketPath = Path.of("/tmp/velocity-player-count-bridge.sock");
 String json = "{"
   + "\"protocol\":\"aiplayers-count-v1\","
   + "\"server_id\":\"survival-1\","
@@ -102,8 +102,20 @@ String json = "{"
   + "\"max_players_override\":120,"
   + "\"auth\":\"SURVIVAL_TOKEN_456\""
   + "}";
-byte[] data = json.getBytes(StandardCharsets.UTF_8);
-player.sendPluginMessage(plugin, channel, data);
+try (SocketChannel channel = SocketChannel.open(StandardProtocolFamily.UNIX)) {
+  channel.connect(UnixDomainSocketAddress.of(socketPath));
+  channel.write(StandardCharsets.UTF_8.encode(json + "\n"));
+}
+
+```
+
+Odpowiedzi serwera (po każdej linii):
+
+- `ok` – payload przyjęty.
+- `unauthorized` – niepoprawny token.
+- `invalid` – błąd parsowania lub brak `server_id`.
+- `protocol_mismatch` – protokół różny od konfiguracji.
+- `not_allowlisted` – `server_id` poza allowlistą.
 ```
 
 ## Walidacja i obsługa błędów
@@ -111,4 +123,3 @@ player.sendPluginMessage(plugin, channel, data);
 - Payloady z błędnym JSON-em, protokołem, auth lub `server_id` są ignorowane.
 - Jeżeli `allowlist_enabled = true`, akceptowane są tylko `server_id` z listy `allowed_server_ids`.
 - Ostrzeżenia są rate‑limitowane w logach, aby uniknąć spamowania.
-
