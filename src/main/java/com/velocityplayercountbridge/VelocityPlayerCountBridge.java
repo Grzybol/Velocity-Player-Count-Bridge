@@ -185,6 +185,15 @@ public class VelocityPlayerCountBridge {
     int onlineAi = Math.max(0, payload.online_ai);
     int onlineTotal = Math.max(0, payload.online_total);
     int maxPlayersOverride = Math.max(0, payload.max_players_override);
+    int aiPlayersCap = config.maxPlayersOverride() > 0 ? config.maxPlayersOverride() : maxPlayersOverride;
+
+    if (aiPlayersCap > 0 && onlineAi > aiPlayersCap) {
+      warnRateLimited("ai-over-cap-" + serverId,
+          "Reported AI count for {} ({}) exceeds max_players_override ({}); capping.",
+          serverId, onlineAi, aiPlayersCap);
+      onlineAi = aiPlayersCap;
+    }
+
     int minTotal = onlineHumans + onlineAi;
     if (onlineTotal < minTotal) {
       warnRateLimited("total-underflow-" + serverId,
@@ -192,11 +201,8 @@ public class VelocityPlayerCountBridge {
           serverId, onlineTotal, onlineHumans, onlineAi, minTotal);
       onlineTotal = minTotal;
     }
-
-    if (config.maxPlayersOverride() > 0 && onlineTotal > config.maxPlayersOverride()) {
-      warnRateLimited("total-over-max-" + serverId,
-          "Reported total for {} ({}) exceeds configured max_players_override ({}).",
-          serverId, onlineTotal, config.maxPlayersOverride());
+    if (aiPlayersCap > 0 && onlineTotal > minTotal) {
+      onlineTotal = minTotal;
     }
 
     long now = System.currentTimeMillis();
