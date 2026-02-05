@@ -6,7 +6,7 @@
 
   <groupId>com.velocityplayercountbridge</groupId>
   <artifactId>velocity-player-count-bridge</artifactId>
-  <version>1.1.1</version>
+  <version>1.1.2</version>
 
   <name>Velocity Player Count Bridge</name>
   <description>Bridge AI player counts from backend servers to Velocity proxy ping.</description>
@@ -65,7 +65,7 @@
       <version>v1.0</version>
     </dependency>
 
-    <!-- ==== JUNIXSOCKET (poprawiona wersja!) ==== -->
+    <!-- ==== JUNIXSOCKET ==== -->
     <dependency>
       <groupId>com.kohlschutter.junixsocket</groupId>
       <artifactId>junixsocket-common</artifactId>
@@ -99,7 +99,7 @@
         </configuration>
       </plugin>
 
-      <!-- SHADE - kluczowe do pluginów Velocity -->
+      <!-- SHADE -->
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-shade-plugin</artifactId>
@@ -116,7 +116,19 @@
               <createDependencyReducedPom>false</createDependencyReducedPom>
               <shadedArtifactAttached>false</shadedArtifactAttached>
 
-              <!-- Bardzo ważne dla junixsocket! -->
+              <!-- FIX: usuń podpisy z zależności, inaczej JVM krzyczy "Invalid signature file digest" -->
+              <filters>
+                <filter>
+                  <artifact>*:*</artifact>
+                  <excludes>
+                    <exclude>META-INF/*.SF</exclude>
+                    <exclude>META-INF/*.DSA</exclude>
+                    <exclude>META-INF/*.RSA</exclude>
+                  </excludes>
+                </filter>
+              </filters>
+
+              <!-- Ważne dla junixsocket i innych ServiceLoaderów -->
               <transformers>
                 <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
               </transformers>
