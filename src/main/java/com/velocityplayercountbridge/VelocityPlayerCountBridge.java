@@ -4,7 +4,6 @@ import com.google.gson.Gson;
 import com.google.gson.JsonSyntaxException;
 import com.velocityplayercountbridge.config.BridgeConfig;
 import com.velocityplayercountbridge.config.ConfigLoader;
-import com.velocityplayercountbridge.http.PlannerApiServer;
 import com.velocityplayercountbridge.logging.BridgeDebugLogger;
 import com.velocityplayercountbridge.model.CountPayload;
 import com.velocityplayercountbridge.model.ServerCountState;
@@ -63,7 +62,6 @@ public class VelocityPlayerCountBridge {
   private AFUNIXServerSocket serverSocket;
   private Thread socketThread;
   private Path socketPath;
-  private PlannerApiServer plannerApiServer;
 
   @Inject
   public VelocityPlayerCountBridge(ProxyServer proxy, Logger logger, @com.velocitypowered.api.plugin.annotation.DataDirectory Path dataDirectory) {
@@ -110,15 +108,6 @@ public class VelocityPlayerCountBridge {
       logger.info("Velocity Player Count Bridge initialized (socket_path={}).", socketPath);
     } else {
       logger.warn("Velocity Player Count Bridge disabled; socket server will not start.");
-    }
-
-    if (config.plannerApi().enabled()) {
-      try {
-        plannerApiServer = new PlannerApiServer(config.plannerApi(), logger, debugLogger, gson);
-        plannerApiServer.start();
-      } catch (IOException exception) {
-        logger.error("Failed to start planner API server.", exception);
-      }
     }
 
     logDebug("Proxy initialized. channel={} protocol={} auth_mode={} allowlist_enabled={} max_players_mode={} max_players_override={} stale_after_ms={}",
@@ -171,9 +160,6 @@ public class VelocityPlayerCountBridge {
   @Subscribe
   public void onProxyShutdown(ProxyShutdownEvent event) {
     shutdownSocketServer();
-    if (plannerApiServer != null) {
-      plannerApiServer.stop();
-    }
   }
 
   private void startSocketServer() {

@@ -41,14 +41,6 @@ allowed_server_ids:
 
 max_players_mode: "keep" # allowed: "keep", "use_max_override", "max_of_overrides"
 max_players_override: 0 # set > 0 to force a static max players value when max_players_mode=use_max_override
-
-planner_api:
-  enabled: false
-  bind_address: "0.0.0.0"
-  port: 8080
-  auth_token: ""
-  plan_path: "/v1/plan"
-  engagement_path: "/v1/engagement"
 ```
 
 ### Auth notes
