@@ -16,3 +16,11 @@ allowed_server_ids:
   - "survival-1"
 
 max_players_mode: "keep" # allowed: "keep", "use_max_override", "max_of_overrides"
+
+planner_api:
+  enabled: false
+  bind_address: "0.0.0.0"
+  port: 8080
+  auth_token: ""
+  plan_path: "/v1/plan"
+  engagement_path: "/v1/engagement"
