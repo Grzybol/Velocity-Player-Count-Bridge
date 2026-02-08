@@ -59,14 +59,6 @@ public class ConfigLoader {
     String maxPlayersModeRaw = root.node("max_players_mode").getString("keep");
     int maxPlayersOverride = root.node("max_players_override").getInt(0);
 
-    ConfigurationNode plannerNode = root.node("planner_api");
-    boolean plannerEnabled = plannerNode.node("enabled").getBoolean(false);
-    String plannerBindAddress = plannerNode.node("bind_address").getString("0.0.0.0");
-    int plannerPort = plannerNode.node("port").getInt(8080);
-    String plannerAuthToken = plannerNode.node("auth_token").getString("");
-    String plannerPlanPath = plannerNode.node("plan_path").getString("/v1/plan");
-    String plannerEngagementPath = plannerNode.node("engagement_path").getString("/v1/engagement");
-
     return new BridgeConfig(
         channel,
         protocol,
@@ -79,14 +71,7 @@ public class ConfigLoader {
         allowlistEnabled,
         allowedServerIds,
         BridgeConfig.MaxPlayersMode.fromString(maxPlayersModeRaw),
-        maxPlayersOverride,
-        new BridgeConfig.PlannerApiConfig(
-            plannerEnabled,
-            plannerBindAddress,
-            plannerPort,
-            plannerAuthToken,
-            plannerPlanPath,
-            plannerEngagementPath));
+        maxPlayersOverride);
   }
 
   private void writeDefaultConfig(Path configPath) throws IOException {

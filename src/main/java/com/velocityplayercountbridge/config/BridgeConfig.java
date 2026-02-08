@@ -20,7 +20,6 @@ public class BridgeConfig {
   private final Set<String> allowedServerIds;
   private final MaxPlayersMode maxPlayersMode;
   private final int maxPlayersOverride;
-  private final PlannerApiConfig plannerApi;
 
   public BridgeConfig(
       String channel,
@@ -34,8 +33,7 @@ public class BridgeConfig {
       boolean allowlistEnabled,
       List<String> allowedServerIds,
       MaxPlayersMode maxPlayersMode,
-      int maxPlayersOverride,
-      PlannerApiConfig plannerApi) {
+      int maxPlayersOverride) {
     this.channel = Objects.requireNonNull(channel, "channel");
     this.protocol = Objects.requireNonNull(protocol, "protocol");
     this.staleAfterMs = staleAfterMs;
@@ -56,7 +54,6 @@ public class BridgeConfig {
             .collect(Collectors.toUnmodifiableSet());
     this.maxPlayersMode = Objects.requireNonNull(maxPlayersMode, "maxPlayersMode");
     this.maxPlayersOverride = Math.max(0, maxPlayersOverride);
-    this.plannerApi = plannerApi == null ? PlannerApiConfig.disabled() : plannerApi;
   }
 
   public String channel() {
@@ -107,10 +104,6 @@ public class BridgeConfig {
     return maxPlayersOverride;
   }
 
-  public PlannerApiConfig plannerApi() {
-    return plannerApi;
-  }
-
   public enum AuthMode {
     GLOBAL,
     PER_SERVER;
@@ -140,61 +133,6 @@ public class BridgeConfig {
         case "use_max_override", "max_of_overrides" -> USE_MAX_OVERRIDE;
         default -> KEEP;
       };
-    }
-  }
-
-  public static final class PlannerApiConfig {
-    private final boolean enabled;
-    private final String bindAddress;
-    private final int port;
-    private final String authToken;
-    private final String planPath;
-    private final String engagementPath;
-
-    public PlannerApiConfig(boolean enabled, String bindAddress, int port, String authToken, String planPath,
-        String engagementPath) {
-      this.enabled = enabled;
-      this.bindAddress = (bindAddress == null || bindAddress.isBlank()) ? "0.0.0.0" : bindAddress.trim();
-      this.port = Math.max(1, Math.min(65535, port));
-      this.authToken = authToken == null ? "" : authToken;
-      this.planPath = normalizePath(planPath, "/v1/plan");
-      this.engagementPath = normalizePath(engagementPath, "/v1/engagement");
-    }
-
-    public static PlannerApiConfig disabled() {
-      return new PlannerApiConfig(false, "0.0.0.0", 8080, "", "/v1/plan", "/v1/engagement");
-    }
-
-    public boolean enabled() {
-      return enabled;
-    }
-
-    public String bindAddress() {
-      return bindAddress;
-    }
-
-    public int port() {
-      return port;
-    }
-
-    public String authToken() {
-      return authToken;
-    }
-
-    public String planPath() {
-      return planPath;
-    }
-
-    public String engagementPath() {
-      return engagementPath;
-    }
-
-    private static String normalizePath(String path, String fallback) {
-      String normalized = path == null || path.isBlank() ? fallback : path.trim();
-      if (!normalized.startsWith("/")) {
-        normalized = "/" + normalized;
-      }
-      return normalized;
     }
   }
 }
