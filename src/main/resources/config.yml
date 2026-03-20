@@ -2,6 +2,7 @@ channel: "aiplayers:count"
 protocol: "aiplayers-count-v1"
 stale_after_ms: 30000
 debug: false
+socket_path: "/tmp/velocity-player-count-bridge.sock"
 
 auth_mode: "per_server" # allowed: "global", "per_server"
 global_token: ""        # used if auth_mode=global

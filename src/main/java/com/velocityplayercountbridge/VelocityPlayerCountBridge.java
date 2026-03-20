@@ -8,20 +8,25 @@ import com.velocityplayercountbridge.logging.BridgeDebugLogger;
 import com.velocityplayercountbridge.model.CountPayload;
 import com.velocityplayercountbridge.model.ServerCountState;
 import com.velocitypowered.api.event.Subscribe;
-import com.velocitypowered.api.event.connection.PluginMessageEvent;
 import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
 import com.velocitypowered.api.event.proxy.ProxyPingEvent;
+import com.velocitypowered.api.event.proxy.ProxyShutdownEvent;
 import com.velocitypowered.api.plugin.Plugin;
 import com.velocitypowered.api.proxy.ProxyServer;
-import com.velocitypowered.api.proxy.ServerConnection;
 import com.velocitypowered.api.proxy.server.ServerPing;
-import com.velocitypowered.api.proxy.messages.ChannelIdentifier;
-import com.velocitypowered.api.proxy.messages.MinecraftChannelIdentifier;
 import org.betterbox.elasticbuffer_velocity.logging.LogBuffer;
+import org.newsclub.net.unix.AFUNIXServerSocket;
+import org.newsclub.net.unix.AFUNIXSocket;
+import org.newsclub.net.unix.AFUNIXSocketAddress;
 
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
 import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.OutputStreamWriter;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.Map;
@@ -50,10 +55,13 @@ public class VelocityPlayerCountBridge {
   private final Map<String, Long> warnTimestamps = new ConcurrentHashMap<>();
 
   private BridgeConfig config;
-  private ChannelIdentifier channelIdentifier;
   private volatile boolean bridgeEnabled = true;
   private BridgeDebugLogger debugLogger;
   private LogBuffer logBuffer;
+  private volatile boolean socketRunning;
+  private AFUNIXServerSocket serverSocket;
+  private Thread socketThread;
+  private Path socketPath;
 
   @Inject
   public VelocityPlayerCountBridge(ProxyServer proxy, Logger logger, @com.velocitypowered.api.plugin.annotation.DataDirectory Path dataDirectory) {
@@ -94,9 +102,13 @@ public class VelocityPlayerCountBridge {
           logsDirectory, exception);
     }
 
-    channelIdentifier = MinecraftChannelIdentifier.from(config.channel());
-    proxy.getChannelRegistrar().register(channelIdentifier);
-    logger.info("Velocity Player Count Bridge initialized on channel {}.", config.channel());
+    socketPath = Path.of(config.socketPath());
+    if (bridgeEnabled) {
+      startSocketServer();
+      logger.info("Velocity Player Count Bridge initialized (socket_path={}).", socketPath);
+    } else {
+      logger.warn("Velocity Player Count Bridge disabled; socket server will not start.");
+    }
 
     logDebug("Proxy initialized. channel={} protocol={} auth_mode={} allowlist_enabled={} max_players_mode={} max_players_override={} stale_after_ms={}",
         config.channel(),
@@ -109,68 +121,156 @@ public class VelocityPlayerCountBridge {
   }
 
   @Subscribe
-  public void onPluginMessage(PluginMessageEvent event) {
+  public void onProxyPing(ProxyPingEvent event) {
     if (!bridgeEnabled || config == null) {
       return;
     }
-    if (!Objects.equals(event.getIdentifier(), channelIdentifier)) {
-      logDebug("PluginMessage ignored: channel mismatch. received_channel={} expected_channel={}",
-          event.getIdentifier().getId(), config.channel());
-      return;
-    }
-    if (!(event.getSource() instanceof ServerConnection)) {
-      logDebug("PluginMessage ignored: source not ServerConnection. source_type={}",
-          event.getSource() == null ? "null" : event.getSource().getClass().getName());
-      return;
+    long now = System.currentTimeMillis();
+    long staleAfterMs = config.staleAfterMs();
+    long onlineTotalSum = 0L;
+    int maxOverride = 0;
+
+    for (ServerCountState state : serverStates.values()) {
+      boolean active;
+      synchronized (state) {
+        active = (now - state.lastSeenMs()) <= staleAfterMs;
+        if (active) {
+          onlineTotalSum += state.onlineTotal();
+          maxOverride = Math.max(maxOverride, state.maxPlayersOverride());
+        }
+      }
     }
 
-    String payloadText = new String(event.getData(), StandardCharsets.UTF_8);
-    logDebug("PluginMessage received. channel={} bytes={} payload={}", config.channel(), event.getData().length,
+    int onlineTotal = (int) Math.min(Integer.MAX_VALUE, onlineTotalSum);
+    ServerPing.Builder builder = event.getPing().asBuilder().onlinePlayers(onlineTotal);
+
+    if (config.maxPlayersMode() == BridgeConfig.MaxPlayersMode.USE_MAX_OVERRIDE) {
+      int effectiveMaxOverride = maxOverride;
+      if (config.maxPlayersOverride() > 0) {
+        effectiveMaxOverride = config.maxPlayersOverride();
+      }
+      if (effectiveMaxOverride > 0) {
+        builder.maximumPlayers(effectiveMaxOverride);
+      }
+    }
+
+    event.setPing(builder.build());
+  }
+
+  @Subscribe
+  public void onProxyShutdown(ProxyShutdownEvent event) {
+    shutdownSocketServer();
+  }
+
+  private void startSocketServer() {
+    socketRunning = true;
+    socketThread = new Thread(this::runSocketServer, "VelocityPlayerCountBridge-UDS");
+    socketThread.setDaemon(true);
+    socketThread.start();
+  }
+
+  private void runSocketServer() {
+    try {
+      Files.deleteIfExists(socketPath);
+    } catch (IOException exception) {
+      logger.warn("Failed to delete existing socket file at {}.", socketPath, exception);
+    }
+
+    try (AFUNIXServerSocket socket = AFUNIXServerSocket.newInstance()) {
+      socket.bind(AFUNIXSocketAddress.of(socketPath));
+      serverSocket = socket;
+      logDebug("Socket server started. socket_path={}", socketPath);
+      while (socketRunning) {
+        try (AFUNIXSocket client = socket.accept()) {
+          handleClient(client);
+        } catch (IOException exception) {
+          if (socketRunning) {
+            logger.warn("Socket accept failed.", exception);
+          }
+        }
+      }
+    } catch (IOException exception) {
+      logger.error("Failed to start socket server at {}.", socketPath, exception);
+    } finally {
+      cleanupSocketFile();
+    }
+  }
+
+  private void handleClient(AFUNIXSocket client) {
+    String remote = client.getRemoteSocketAddress() == null ? "local" : client.getRemoteSocketAddress().toString();
+    logDebug("Socket client connected. remote={}", remote);
+    try (BufferedReader reader = new BufferedReader(new InputStreamReader(client.getInputStream(), StandardCharsets.UTF_8));
+        BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(client.getOutputStream(), StandardCharsets.UTF_8))) {
+      String line;
+      while (socketRunning && (line = reader.readLine()) != null) {
+        PayloadResult result = handlePayloadLine(line);
+        writer.write(result.response());
+        writer.newLine();
+        writer.flush();
+      }
+    } catch (IOException exception) {
+      if (socketRunning) {
+        logDebug("Socket client connection error. error={}", exception.getMessage());
+      }
+    }
+  }
+
+  private PayloadResult handlePayloadLine(String payloadText) {
+    if (!bridgeEnabled || config == null) {
+      return PayloadResult.INVALID;
+    }
+    if (payloadText == null || payloadText.isBlank()) {
+      warnRateLimited("invalid-empty", "Empty payload received on socket {}", socketPath);
+      logDebug("Socket payload rejected: empty line.");
+      return PayloadResult.INVALID;
+    }
+
+    logDebug("Socket payload received. bytes={} payload={}", payloadText.getBytes(StandardCharsets.UTF_8).length,
         payloadText);
     CountPayload payload;
     try {
       payload = gson.fromJson(payloadText, CountPayload.class);
     } catch (JsonSyntaxException exception) {
-      warnRateLimited("invalid-json", "Invalid JSON payload on channel {}", config.channel());
-      logDebug("PluginMessage rejected: invalid JSON. error={}", exception.getMessage());
-      return;
+      warnRateLimited("invalid-json", "Invalid JSON payload on socket {}", socketPath);
+      logDebug("Socket payload rejected: invalid JSON. error={}", exception.getMessage());
+      return PayloadResult.INVALID;
     }
 
     if (payload == null) {
-      warnRateLimited("null-payload", "Empty payload received on channel {}", config.channel());
-      logDebug("PluginMessage rejected: payload deserialized to null.");
-      return;
+      warnRateLimited("null-payload", "Empty payload received on socket {}", socketPath);
+      logDebug("Socket payload rejected: payload deserialized to null.");
+      return PayloadResult.INVALID;
     }
 
     String serverId = payload.server_id == null ? "" : payload.server_id.trim();
     if (serverId.isEmpty()) {
       warnRateLimited("missing-server-id", "Payload missing server_id; ignoring.");
-      logDebug("PluginMessage rejected: missing server_id. payload={}", payloadText);
-      return;
+      logDebug("Socket payload rejected: missing server_id. payload={}", payloadText);
+      return PayloadResult.INVALID;
     }
 
     if (!Objects.equals(config.protocol(), payload.protocol)) {
       warnRateLimited("protocol-" + serverId, "Protocol mismatch for server {}", serverId);
-      logDebug("PluginMessage rejected: protocol mismatch. server_id={} expected_protocol={} received_protocol={}",
+      logDebug("Socket payload rejected: protocol mismatch. server_id={} expected_protocol={} received_protocol={}",
           serverId, config.protocol(), payload.protocol);
-      return;
+      return PayloadResult.PROTOCOL_MISMATCH;
     }
 
     if (!isAuthorized(serverId, payload.auth)) {
       warnRateLimited("auth-" + serverId, "Rejected payload for server {} due to auth failure.", serverId);
-      logDebug("PluginMessage rejected: auth failure. server_id={} auth_mode={} auth_present={} auth_preview={}",
+      logDebug("Socket payload rejected: auth failure. server_id={} auth_mode={} auth_present={} auth_preview={}",
           serverId, config.authMode(), payload.auth != null, maskAuth(payload.auth));
-      return;
+      return PayloadResult.UNAUTHORIZED;
     }
 
     if (config.allowlistEnabled() && !config.allowedServerIds().contains(serverId)) {
       warnRateLimited("allowlist-" + serverId, "Server {} not in allowlist; ignoring payload.", serverId);
-      logDebug("PluginMessage rejected: server not in allowlist. server_id={}", serverId);
-      return;
+      logDebug("Socket payload rejected: server not in allowlist. server_id={}", serverId);
+      return PayloadResult.NOT_ALLOWLISTED;
     }
 
     logDebug(
-        "PluginMessage validated. server_id={} timestamp_ms={} online_humans={} online_ai={} online_total={} max_players_override={}",
+        "Socket payload validated. server_id={} timestamp_ms={} online_humans={} online_ai={} online_total={} max_players_override={}",
         serverId, payload.timestamp_ms, payload.online_humans, payload.online_ai, payload.online_total,
         payload.max_players_override);
 
@@ -213,9 +313,9 @@ public class VelocityPlayerCountBridge {
           logger.debug("Out-of-order payload for {} ignored ({} < {}).", serverId, payload.timestamp_ms,
               state.lastTimestampMs());
         }
-        logDebug("PluginMessage ignored: out-of-order timestamp. server_id={} incoming={} last={}", serverId,
+        logDebug("Socket payload ignored: out-of-order timestamp. server_id={} incoming={} last={}", serverId,
             payload.timestamp_ms, state.lastTimestampMs());
-        return;
+        return PayloadResult.OK;
       }
       // Accept idempotent updates where timestamp_ms is equal to lastTimestampMs.
       state.update(now, payload.timestamp_ms, onlineHumans, onlineAi, onlineTotal, maxPlayersOverride);
@@ -225,45 +325,40 @@ public class VelocityPlayerCountBridge {
       logger.debug("Accepted payload for {}: total={}, humans={}, ai={}, max_override={}", serverId, onlineTotal,
           onlineHumans, onlineAi, maxPlayersOverride);
     }
-    logDebug("PluginMessage accepted. server_id={} total={} humans={} ai={} max_override={}", serverId, onlineTotal,
+    logDebug("Socket payload accepted. server_id={} total={} humans={} ai={} max_override={}", serverId, onlineTotal,
         onlineHumans, onlineAi, maxPlayersOverride);
+    return PayloadResult.OK;
   }
 
-  @Subscribe
-  public void onProxyPing(ProxyPingEvent event) {
-    if (!bridgeEnabled || config == null) {
+  private void shutdownSocketServer() {
+    socketRunning = false;
+    if (serverSocket != null) {
+      try {
+        serverSocket.close();
+      } catch (IOException exception) {
+        logger.warn("Failed to close socket server.", exception);
+      }
+    }
+    if (socketThread != null) {
+      socketThread.interrupt();
+      try {
+        socketThread.join(2000L);
+      } catch (InterruptedException exception) {
+        Thread.currentThread().interrupt();
+      }
+    }
+    cleanupSocketFile();
+  }
+
+  private void cleanupSocketFile() {
+    if (socketPath == null) {
       return;
     }
-    long now = System.currentTimeMillis();
-    long staleAfterMs = config.staleAfterMs();
-    long onlineTotalSum = 0L;
-    int maxOverride = 0;
-
-    for (ServerCountState state : serverStates.values()) {
-      boolean active;
-      synchronized (state) {
-        active = (now - state.lastSeenMs()) <= staleAfterMs;
-        if (active) {
-          onlineTotalSum += state.onlineTotal();
-          maxOverride = Math.max(maxOverride, state.maxPlayersOverride());
-        }
-      }
+    try {
+      Files.deleteIfExists(socketPath);
+    } catch (IOException exception) {
+      logger.warn("Failed to delete socket file at {}.", socketPath, exception);
     }
-
-    int onlineTotal = (int) Math.min(Integer.MAX_VALUE, onlineTotalSum);
-    ServerPing.Builder builder = event.getPing().asBuilder().onlinePlayers(onlineTotal);
-
-    if (config.maxPlayersMode() == BridgeConfig.MaxPlayersMode.USE_MAX_OVERRIDE) {
-      int effectiveMaxOverride = maxOverride;
-      if (config.maxPlayersOverride() > 0) {
-        effectiveMaxOverride = config.maxPlayersOverride();
-      }
-      if (effectiveMaxOverride > 0) {
-        builder.maximumPlayers(effectiveMaxOverride);
-      }
-    }
-
-    event.setPing(builder.build());
   }
 
   private boolean isAuthorized(String serverId, String auth) {
@@ -329,5 +424,23 @@ public class VelocityPlayerCountBridge {
       return "****";
     }
     return auth.substring(0, 2) + "..." + auth.substring(auth.length() - 2);
+  }
+
+  private enum PayloadResult {
+    OK("ok"),
+    UNAUTHORIZED("unauthorized"),
+    INVALID("invalid"),
+    PROTOCOL_MISMATCH("protocol_mismatch"),
+    NOT_ALLOWLISTED("not_allowlisted");
+
+    private final String response;
+
+    PayloadResult(String response) {
+      this.response = response;
+    }
+
+    public String response() {
+      return response;
+    }
   }
 }

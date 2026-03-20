@@ -45,6 +45,7 @@ public class ConfigLoader {
     String protocol = root.node("protocol").getString("aiplayers-count-v1");
     long staleAfterMs = root.node("stale_after_ms").getLong(30000L);
     boolean debug = root.node("debug").getBoolean(false);
+    String socketPath = root.node("socket_path").getString("/tmp/velocity-player-count-bridge.sock");
 
     String authModeRaw = root.node("auth_mode").getString("per_server");
     String globalToken = root.node("global_token").getString("");
@@ -63,6 +64,7 @@ public class ConfigLoader {
         protocol,
         staleAfterMs,
         debug,
+        socketPath,
         BridgeConfig.AuthMode.fromString(authModeRaw),
         globalToken,
         serverTokens,
